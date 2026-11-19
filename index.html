@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Escáner de códigos</title>
+<style>
+  body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 16px; background: #f5f6f8; color: #222; }
+  h1 { font-size: 1.35rem; margin: 0 0 12px; }
+  .card { background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  video { width: 100%; max-height: 45vh; background: #000; border-radius: 10px; display: block; }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  input, select, textarea { width: 100%; box-sizing: border-box; font-size: 16px; padding: 10px; border: 1px solid #bbb; border-radius: 8px; background: #fff; }
+  button { font-size: 16px; padding: 12px; border: 0; border-radius: 8px; background: #1565c0; color: #fff; width: 100%; margin-top: 10px; }
+  button.sec { background: #546e7a; }
+  button:disabled { opacity: .6; }
+  #estado, #resultado { font-size: 15px; margin-top: 8px; min-height: 1.2em; }
+  .ok { color: #2e7d32; }
+  .err { color: #c62828; }
+  details summary { font-weight: 600; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>Escáner de códigos</h1>
+
+<div class="card">
+  <video id="video" playsinline muted></video>
+  <button id="btnCam" class="sec">Iniciar cámara</button>
+  <div id="estado"></div>
+</div>
+
+<div class="card">
+  <label for="codigo">Código</label>
+  <input id="codigo" inputmode="numeric" placeholder="Escanea o escribe el código">
+
+  <label for="formato">Formato</label>
+  <input id="formato" readonly placeholder="EAN-13 o Code 128">
+
+  <label for="tipo">Tipo</label>
+  <select id="tipo">
+    <option value="Bodega">Bodega</option>
+    <option value="Medidor">Medidor</option>
+  </select>
+
+  <label for="cantidad">Cantidad o lectura</label>
+  <input id="cantidad" inputmode="decimal" placeholder="Ej: 3 o 1254.6">
+
+  <label for="usuario">Usuario</label>
+  <input id="usuario" placeholder="Tu nombre">
+
+  <label for="notas">Notas</label>
+  <textarea id="notas" rows="2"></textarea>
+
+  <button id="btnGuardar">Guardar</button>
+  <div id="resultado"></div>
+</div>
+
+<div class="card">
+  <details>
+    <summary>Configuración</summary>
+    <label for="token">Token de seguridad</label>
+    <input id="token" type="password" autocomplete="off">
+    <button id="btnToken" class="sec">Guardar token en este teléfono</button>
+    <div id="msgToken"></div>
+  </details>
+</div>
+
+<!-- Lector de códigos EAN-13 y Code 128 (ZXing) -->
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+  // URL del script de Apps Script (aplicación web)
+  const URL_SCRIPT = 'https://script.google.com/macros/s/AKfycbxaZEjiBEF69TiqEtmNOTSqqnoK9A7g--zNd60fYSPXJdtEM-HJLBl2-Xs6IRdv3L2SSA/exec';
+  const HOJA = 'Escaneos';
+  const CLAVE_TOKEN = 'token_escaneos';
+
+  const $ = id => document.getElementById(id);
+
+  function leerToken() {
+    try { return localStorage.getItem(CLAVE_TOKEN) || ''; } catch (e) { return ''; }
+  }
+
+  function mostrar(el, texto, clase) {
+    el.textContent = texto;
+    el.className = clase;
+  }
+
+  // ---- Token ----
+  $('token').value = leerToken();
+  $('btnToken').onclick = () => {
+    const t = $('token').value.trim();
+    try { localStorage.setItem(CLAVE_TOKEN, t); } catch (e) {}
+    mostrar($('msgToken'), t ? 'Token guardado en este teléfono.' : 'Token vacío.', t ? 'ok' : 'err');
+  };
+
+  // ---- Cámara y lectura ----
+  let controles = null;
+  $('btnCam').onclick = async () => {
+    if (controles) { // detener
+      controles.stop();
+      controles = null;
+      $('btnCam').textContent = 'Iniciar cámara';
+      return;
+    }
+    if (typeof ZXing === 'undefined') {
+      mostrar($('estado'), 'No se cargó el lector de códigos. Revisa tu conexión.', 'err');
+      return;
+    }
+    try {
+      const pistas = new Map();
+      pistas.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,
+        [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.CODE_128]);
+      const lector = new ZXing.BrowserMultiFormatReader(pistas);
+      mostrar($('estado'), 'Apunta la cámara al código de barras…', '');
+      $('btnCam').textContent = 'Detener cámara';
+      controles = await lector.decodeFromConstraints(
+        { video: { facingMode: { ideal: 'environment' } } },
+        $('video'),
+        (resultado) => {
+          if (!resultado) return; // ruido normal entre lecturas
+          $('codigo').value = resultado.getText();
+          $('formato').value = resultado.getBarcodeFormat() === ZXing.BarcodeFormat.EAN_13 ? 'EAN-13' : 'Code 128';
+          mostrar($('estado'), 'Código leído. Completa los datos y guarda.', 'ok');
+          if (navigator.vibrate) navigator.vibrate(120);
+          controles.stop();
+          controles = null;
+          $('btnCam').textContent = 'Escanear otro';
+        }
+      );
+    } catch (e) {
+      controles = null;
+      $('btnCam').textContent = 'Iniciar cámara';
+      mostrar($('estado'), 'No se pudo abrir la cámara. Revisa los permisos del navegador. ' + e, 'err');
+    }
+  };
+
+  // ---- Guardar ----
+  $('btnGuardar').onclick = async () => {
+    const token = leerToken() || $('token').value.trim();
+    const codigo = $('codigo').value.trim();
+    const cantidad = $('cantidad').value.trim();
+
+    if (!token) { mostrar($('resultado'), 'Falta el token. Ábrelo en Configuración y guárdalo.', 'err'); return; }
+    if (!codigo) { mostrar($('resultado'), 'Escribe o escanea un código.', 'err'); return; }
+    if (!cantidad) { mostrar($('resultado'), 'Escribe la cantidad o la lectura.', 'err'); return; }
+
+    const datos = {
+      token: token,
+      hoja: HOJA,
+      tipo: $('tipo').value,
+      codigo: codigo,
+      formato: $('formato').value,
+      cantidad: cantidad,
+      usuario: $('usuario').value.trim(),
+      notas: $('notas').value.trim()
+    };
+
+    const btn = $('btnGuardar');
+    btn.disabled = true;
+    mostrar($('resultado'), 'Guardando…', '');
+    try {
+      // text/plain evita la solicitud previa (CORS) que Apps Script no admite
+      const r = await fetch(URL_SCRIPT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(datos)
+      });
+      const j = await r.json();
+      if (j.ok) {
+        mostrar($('resultado'), 'Guardado en la hoja.', 'ok');
+        $('codigo').value = '';
+        $('formato').value = '';
+        $('cantidad').value = '';
+        $('notas').value = '';
+      } else {
+        mostrar($('resultado'), 'No se guardó: ' + (j.error || 'error desconocido'), 'err');
+      }
+    } catch (e) {
+      mostrar($('resultado'), 'No se pudo enviar. Revisa tu conexión. ' + e, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+</script>
+</body>
+</html>
